@@ -16,8 +16,8 @@
 
 package com.github.mheath.netty.codec.mysql;
 
-public interface MysqlPacket {
+import io.netty.channel.ChannelHandlerContext;
 
+public interface MysqlPacket extends Visitable {
 	int getSequenceId();
-
 }
