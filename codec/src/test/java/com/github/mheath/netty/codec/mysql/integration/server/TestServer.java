@@ -7,19 +7,7 @@ import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import com.github.mheath.netty.codec.mysql.ColumnCount;
-import com.github.mheath.netty.codec.mysql.ColumnDefinition;
-import com.github.mheath.netty.codec.mysql.ColumnFlag;
-import com.github.mheath.netty.codec.mysql.ColumnType;
-import com.github.mheath.netty.codec.mysql.EofResponse;
-import com.github.mheath.netty.codec.mysql.Handshake;
-import com.github.mheath.netty.codec.mysql.HandshakeResponse;
-import com.github.mheath.netty.codec.mysql.MysqlCharacterSet;
-import com.github.mheath.netty.codec.mysql.MysqlClientConnectionPacketDecoder;
-import com.github.mheath.netty.codec.mysql.MysqlClientPacketDecoder;
-import com.github.mheath.netty.codec.mysql.MysqlServerPacketEncoder;
-import com.github.mheath.netty.codec.mysql.QueryCommand;
-import com.github.mheath.netty.codec.mysql.ResultsetRow;
+import com.github.mheath.netty.codec.mysql.*;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -31,9 +19,6 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
-import com.github.mheath.netty.codec.mysql.CapabilityFlags;
-import com.github.mheath.netty.codec.mysql.MysqlClientCommandPacketDecoder;
-import com.github.mheath.netty.codec.mysql.OkResponse;
 import org.assertj.core.api.Assertions;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -128,6 +113,34 @@ public class TestServer implements AutoCloseable {
 				handleQuery(ctx, (QueryCommand) msg);
 			} else {
 				System.out.println("Received message: " + msg);
+
+				// Mergen: Prevent hanging on client connection.
+				if (msg instanceof CommandPacket) {
+					CommandPacket commandPacket = (CommandPacket) msg;
+					Command command = commandPacket.getCommand();
+					System.out.println("Received command: " + command);
+					if (command.equals(Command.COM_INIT_DB) || command.equals(Command.COM_QUIT)) {
+						// Generic response
+						int sequenceId = ((MysqlPacket) msg).getSequenceId();
+						ctx.write(new ColumnCount(++sequenceId, 1));
+						ctx.write(ColumnDefinition.builder()
+								.sequenceId(++sequenceId)
+								.catalog("catalog")
+								.schema("schema")
+								.table("table")
+								.orgTable("org_table")
+								.name("name")
+								.orgName("org_name")
+								.columnLength(10)
+								.type(ColumnType.MYSQL_TYPE_DOUBLE)
+								.addFlags(ColumnFlag.NUM)
+								.decimals(5)
+								.build());
+						ctx.write(new EofResponse(++sequenceId, 0));
+						ctx.write(new ResultsetRow(++sequenceId, "1"));
+						ctx.writeAndFlush(new EofResponse(++sequenceId, 0));
+					}
+				}
 			}
 		}
 
@@ -184,8 +197,14 @@ public class TestServer implements AutoCloseable {
 	private void sendSettingsResponse(ChannelHandlerContext ctx, QueryCommand query) {
 		final Matcher matcher = SETTINGS_PATTERN.matcher(query.getQuery());
 
+		// Mergen: Add column count row before column definitions to prevent 'UPDATE not result set'.
+		final List<ColumnDefinition> columnDefinitions = new ArrayList<>();
+
 		final List<String> values = new ArrayList<>();
 		int sequenceId = query.getSequenceId();
+
+		// Mergen: sequenceId++ to ++sequenceId.
+		int columnCountSequenceId = ++sequenceId;
 
 		while (matcher.find()) {
 			String systemVariable = matcher.group(1);
@@ -195,72 +214,77 @@ public class TestServer implements AutoCloseable {
 				case "character_set_connection":
 				case "character_set_results":
 				case "character_set_server":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_VAR_STRING, 12));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_VAR_STRING, 12));
 					values.add("utf8");
 					break;
 				case "collation_server":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 21));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 21));
 					values.add("utf8_general_ci");
 					break;
 				case "init_connect":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_VAR_STRING, 0));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_VAR_STRING, 0));
 					values.add("");
 					break;
 				case "interactive_timeout":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_VAR_STRING, 21));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_VAR_STRING, 21));
 					values.add("28800");
 					break;
 				case "language":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_VAR_STRING, 0));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_VAR_STRING, 0));
 					values.add("");
 					break;
 				case "license":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_VAR_STRING, 21));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_VAR_STRING, 21));
 					values.add("ASLv2");
 					break;
 				case "lower_case_table_names":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 63));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 63));
 					values.add("2");
 					break;
 				case "max_allowed_packet":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 63));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 63));
 					values.add("4194304");
 					break;
 				case "net_buffer_length":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 63));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 63));
 					values.add("16384");
 					break;
 				case "net_write_timeout":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 63));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 63));
 					values.add("60");
 					break;
 				case "have_query_cache":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 6));
-					values.add("YES");
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 6));
+					// Mergen: YES to NO.
+					values.add("NO");
 					break;
 				case "sql_mode":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 0));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 0));
 					values.add("");
 					break;
 				case "system_time_zone":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 6));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 6));
 					values.add("UTC");
 					break;
 				case "time_zone":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 12));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 12));
 					values.add("SYSTEM");
 					break;
 				case "tx_isolation":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 12));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 12));
 					values.add("REPEATABLE-READ");
 					break;
 				case "wait_timeout":
-					ctx.write(newColumnDefinition(sequenceId++, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 12));
+					columnDefinitions.add(newColumnDefinition(++sequenceId, fieldName, systemVariable, ColumnType.MYSQL_TYPE_LONGLONG, 12));
 					values.add("28800");
 					break;
 				default:
 					throw new Error("Unknown system variable " + systemVariable);
 			}
+		}
+		ctx.write(new ColumnCount(columnCountSequenceId, values.size()));
+		for (ColumnDefinition columnDefinition : columnDefinitions) {
+			ctx.write(columnDefinition);
 		}
 		ctx.write(new EofResponse(++sequenceId, 0));
 		ctx.write(new ResultsetRow(++sequenceId, values.toArray(new String[values.size()])));
@@ -270,6 +294,13 @@ public class TestServer implements AutoCloseable {
 	private ColumnDefinition newColumnDefinition(int packetSequence, String name, String orgName, ColumnType columnType, int length) {
 		return ColumnDefinition.builder()
 				.sequenceId(packetSequence)
+
+				// Mergen: Added to prevent out of bound.
+				.catalog("catalog")
+				.schema("schema")
+				.table("table")
+				.orgTable("org_table")
+
 				.name(name)
 				.orgName(orgName)
 				.type(columnType)

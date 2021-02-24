@@ -31,9 +31,14 @@ public class JdbcClientTest {
 	}
 
 	@Test
-	@Disabled
+	// Mergen: Enable testing.
+//	@Disabled
 	public void connectAndQuery() throws Exception {
-		try (Connection conn = DriverManager.getConnection("jdbc:mysql://localhost:" + server.getPort() + "/test", server.getUser(), server.getPassword())) {
+
+		// Mergen: For client test.
+//		Thread.sleep(999999999L);
+
+		try (Connection conn = DriverManager.getConnection("jdbc:mysql://localhost:" + server.getPort() + "/aaa", server.getUser(), server.getPassword())) {
 			Assertions.assertThat(conn.isClosed()).isFalse();
 			final SQLWarning warnings = conn.getWarnings();
 			try (Statement statement = conn.createStatement()) {
